@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "GChat Space Filter",
+  "version": "0.1.0",
+  "description": "Lọc mục Home của Google Chat theo danh sách space (dự án) bạn chọn — vẫn giữ chế độ xem theo thread.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GChat Space Filter",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.google.com/*",
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "keyguard.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chat.google.com/*",
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
