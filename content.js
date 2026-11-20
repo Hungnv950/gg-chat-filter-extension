@@ -19,17 +19,19 @@ const nameCache = new WeakMap(); // row -> {sig, name}
 
 const norm = (s) => (s || "").normalize("NFC").replace(/\s+/g, " ").trim();
 const low = (s) => norm(s).toLowerCase();
+// Google Chat giữ lại bản DOM cũ (ẩn) khi đổi view Home ↔ Thread → chỉ tin phần tử đang hiển thị.
+const visible = (el) => !!el && el.isConnected && el.getClientRects().length > 0;
 
 // ---------- tìm header + danh sách ----------
 function findHeader() {
-  if (headerEl && headerEl.isConnected && looksLikeHeader(headerEl)) return headerEl;
+  if (visible(headerEl) && looksLikeHeader(headerEl)) return headerEl;
   headerEl = null;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (!HOME_WORDS.includes(low(n.nodeValue))) continue;
     let el = n.parentElement;
     for (let i = 0; el && i < 6; i++, el = el.parentElement) {
-      if (looksLikeHeader(el)) return (headerEl = el);
+      if (looksLikeHeader(el) && visible(el)) return (headerEl = el);
     }
   }
   return null;
@@ -40,14 +42,21 @@ function looksLikeHeader(el) {
   return t.length < 120 && HOME_WORDS.some((w) => t.startsWith(w)) && UNREAD_WORDS.some((w) => t.includes(w));
 }
 
+// List và header phải cùng nằm trong khối Home hiện tại (tổ tiên chung gần, ≤ 8 cấp từ header).
+function sameRoot(list, header) {
+  let r = header.parentElement;
+  for (let i = 0; r && i < 8; i++, r = r.parentElement) if (r.contains(list)) return true;
+  return false;
+}
+
 function findList(header) {
-  if (listEl && listEl.isConnected && !listEl.contains(header) && document.contains(listEl)) return listEl;
+  if (visible(listEl) && !listEl.contains(header) && sameRoot(listEl, header)) return listEl;
   listEl = null;
   let root = header.parentElement;
   for (let i = 0; root && i < 6; i++, root = root.parentElement) {
     let best = null, bestScore = 1;
     for (const el of root.querySelectorAll("*")) {
-      if (el.contains(header) || el.children.length < 2) continue;
+      if (el.contains(header) || el.children.length < 2 || !visible(el)) continue;
       let score = 0;
       for (const k of el.children) {
         if (k.contains(header) || k === host) continue;
@@ -75,9 +84,11 @@ function rowInfo(row) {
   const sig = row.textContent.length + "|" + row.textContent.slice(0, 80);
   const c = nameCache.get(row);
   if (c && c.sig === sig) return c;
-  if (row.hasAttribute(HIDDEN)) return c || { name: null }; // đang ẩn, innerText không còn xuống dòng
+  // Đang ẩn / chưa render (lúc trang mới tải) → innerText rỗng hoặc dính liền 1 dòng: không đọc, không cache.
+  if (row.hasAttribute(HIDDEN) || !visible(row)) return c || { name: null };
   const lines = (row.innerText || "").split("\n").map(norm).filter(Boolean);
-  const info = { sig, name: lines[0] || null, isSpace: looksLikeSpace(lines) };
+  if (lines.length < 2) return c || { name: null }; // chưa đủ nội dung → thử lại lần sau
+  const info = { sig, name: lines[0], isSpace: looksLikeSpace(lines) };
   nameCache.set(row, info);
   return info;
 }
@@ -101,7 +112,9 @@ function hide(row) {
 // gộp dồn qua các lần quét (lưu storage), bấm "Show all" 1 lần là đủ.
 const DM_WORDS = ["direct messages", "tin nhắn trực tiếp"];
 const SKIP_SECTIONS = ["shortcuts", "lối tắt", "reminder", "lời nhắc", "apps", "ứng dụng"];
-const NOISE = ["show all", "show less", "hiện tất cả", "ẩn bớt", "thu gọn", "xem tất cả", "now", "bây giờ", "app", "ứng dụng"];
+const NOISE = ["show all", "show less", "hiện tất cả", "ẩn bớt", "thu gọn", "xem tất cả", "now", "bây giờ", "app", "ứng dụng",
+  "unread", "chưa đọc", "unread followed thread", "click to show all", "toggle unread filter",
+  "muted,", "muted", "đã tắt tiếng", "away", "active", "idle", "vắng mặt", "đang hoạt động", "không hoạt động"];
 const ITEM_SEL = '[role="listitem"], [role="treeitem"], [role="option"], [role="link"], a[href]';
 const lines = (el) => (el.innerText || "").split("\n").map(norm).filter(Boolean);
 const isNoise = (l) => NOISE.includes(low(l)) || /^\d+$/.test(l) || /^\d{1,2}:\d{2}/.test(l);
@@ -413,8 +426,18 @@ chrome.storage.local.get({ ...DEFAULTS, v: 1 }, (v) => {
     chrome.storage.local.set({ known: v.known, v: DATA_VERSION });
   }
   state = { ...DEFAULTS, ...v };
+  // Dọn rác đã lỡ gộp vào section từ bản cũ ("Unread", "Click to show all"…).
+  const clean = Object.fromEntries(Object.entries(state.sections).map(([g, it]) => [g, it.filter((l) => !isNoise(l))]));
+  if (JSON.stringify(clean) !== JSON.stringify(state.sections)) {
+    state.sections = clean;
+    chrome.storage.local.set({ sections: clean });
+  }
   apply();
-  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  // Theo dõi cả đổi style/class: bật/tắt view Thread có thể chỉ ẩn/hiện danh sách chứ không thêm node.
+  new MutationObserver(schedule).observe(document.documentElement, {
+    childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ["style", "class", "hidden", "aria-hidden"],
+  });
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
